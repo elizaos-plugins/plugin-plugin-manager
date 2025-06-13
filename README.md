@@ -1,230 +1,271 @@
-# ElizaOS Plugin
+# Plugin Manager for Eliza Autonomous Agent
 
-This is an ElizaOS plugin built with the official plugin starter template.
+The Plugin Manager enables dynamic loading and unloading of plugins at runtime without requiring agent restarts. This is essential for the autonomous agent to extend its own capabilities.
 
-## Getting Started
+## Features
 
-```bash
-# Create a new plugin (automatically adds "plugin-" prefix)
-elizaos create -t plugin solana
-# This creates: plugin-solana
-# Dependencies are automatically installed and built
+- **Dynamic Plugin Loading**: Load plugins at runtime without restarting the agent
+- **Safe Plugin Unloading**: Unload plugins and clean up their resources
+- **Plugin State Management**: Track plugin states (building, ready, loaded, error, unloaded)
+- **Environment Variable Detection**: Detect and report missing environment variables
+- **Original Plugin Protection**: Prevents unloading of plugins loaded at startup
+- **Component Registration**: Automatically registers actions, providers, evaluators, and services
 
-# Navigate to the plugin directory
-cd plugin-solana
+## Architecture
 
-# Start development immediately
-elizaos dev
+### Plugin States
+
+```typescript
+enum PluginStatus {
+  BUILDING = 'building', // Plugin is being built/compiled
+  READY = 'ready', // Plugin is ready to be loaded
+  LOADED = 'loaded', // Plugin is currently loaded and active
+  ERROR = 'error', // Plugin encountered an error
+  UNLOADED = 'unloaded', // Plugin was previously loaded but is now unloaded
+}
 ```
 
-## Development
+### Components
 
-```bash
-# Start development with hot-reloading (recommended)
-elizaos dev
+1. **PluginManagerService**: Core service that manages plugin lifecycle
+2. **pluginStateProvider**: Provides current state of all plugins
+3. **loadPluginAction**: Action to load a plugin
+4. **unloadPluginAction**: Action to unload a plugin
 
-# OR start without hot-reloading
-elizaos start
-# Note: When using 'start', you need to rebuild after changes:
-# bun run build
+## Usage
 
-# Test the plugin
-elizaos test
+### 1. Add Plugin Manager to Your Agent
+
+```typescript
+import { pluginManagerPlugin } from './plugin-manager';
+
+export const projectAgent: ProjectAgent = {
+  character,
+  plugins: [
+    // ... other plugins
+    pluginManagerPlugin,
+  ],
+};
+```
+
+### 2. Create a Dynamic Plugin
+
+```typescript
+import type { Plugin } from '@elizaos/core';
+
+export const myDynamicPlugin: Plugin = {
+  name: 'my-dynamic-plugin',
+  description: 'A plugin that can be loaded at runtime',
+
+  actions: [
+    {
+      name: 'MY_ACTION',
+      similes: ['my action'],
+      description: 'Does something useful',
+      validate: async () => true,
+      handler: async (runtime, message, state, options, callback) => {
+        if (callback) {
+          await callback({
+            text: 'Action executed!',
+            actions: ['MY_ACTION'],
+          });
+        }
+      },
+    },
+  ],
+
+  providers: [
+    {
+      name: 'myProvider',
+      description: 'Provides data',
+      get: async () => ({
+        text: 'Provider data',
+        values: { key: 'value' },
+        data: {},
+      }),
+    },
+  ],
+
+  init: async (config, runtime) => {
+    console.log('Plugin initialized!');
+  },
+};
+```
+
+### 3. Register Plugin with Plugin Manager
+
+```typescript
+// In your code
+const pluginManager = runtime.getService('PLUGIN_MANAGER') as PluginManagerService;
+const pluginId = await pluginManager.registerPlugin(myDynamicPlugin);
+```
+
+### 4. Load Plugin via Action
+
+The agent can load plugins through natural language:
+
+```
+User: "Load the my-dynamic-plugin"
+Agent: "Loading the my-dynamic-plugin now."
+Agent: "Successfully loaded plugin: my-dynamic-plugin"
+```
+
+### 5. Check Plugin States
+
+```
+User: "What plugins are available?"
+Agent: "**Loaded Plugins:**
+- auto (loaded)
+- bootstrap (loaded)
+- groq (loaded)
+- shell (loaded)
+- plugin-manager (loaded)
+
+**Ready to Load:**
+- my-dynamic-plugin (ready)"
+```
+
+### 6. Unload Plugin
+
+```
+User: "Unload my-dynamic-plugin"
+Agent: "Successfully unloaded plugin: my-dynamic-plugin"
+```
+
+## API Reference
+
+### PluginManagerService
+
+```typescript
+class PluginManagerService {
+  // Register a new plugin
+  async registerPlugin(plugin: Plugin): Promise<string>
+
+  // Load a registered plugin
+  async loadPlugin({ pluginId, force? }: LoadPluginParams): Promise<void>
+
+  // Unload a loaded plugin
+  async unloadPlugin({ pluginId }: UnloadPluginParams): Promise<void>
+
+  // Get plugin state
+  getPlugin(id: string): PluginState | undefined
+
+  // Get all plugins
+  getAllPlugins(): PluginState[]
+
+  // Get loaded plugins
+  getLoadedPlugins(): PluginState[]
+
+  // Update plugin state
+  updatePluginState(id: string, update: Partial<PluginState>): void
+}
+```
+
+### Plugin State
+
+```typescript
+interface PluginState {
+  id: string;
+  name: string;
+  status: PluginStatus;
+  plugin?: Plugin;
+  missingEnvVars: string[];
+  buildLog: string[];
+  sourceCode?: string;
+  packageJson?: any;
+  error?: string;
+  createdAt: number;
+  loadedAt?: number;
+  unloadedAt?: number;
+  version?: string;
+  dependencies?: Record<string, string>;
+}
+```
+
+## Examples
+
+### Example: Dynamic Plugin with Environment Variables
+
+```typescript
+const pluginWithEnvVars: Plugin = {
+  name: 'api-plugin',
+  description: 'Plugin that requires API keys',
+
+  init: async (config, runtime) => {
+    const requiredVars = ['API_KEY', 'API_SECRET'];
+    const missing = requiredVars.filter((v) => !runtime.getSetting(v));
+
+    if (missing.length > 0) {
+      // Plugin manager will track these missing variables
+      throw new Error(`Missing environment variables: ${missing.join(', ')}`);
+    }
+  },
+
+  // ... rest of plugin
+};
+```
+
+### Example: Plugin with Service
+
+```typescript
+class MyService extends Service {
+  static serviceType = 'MY_SERVICE' as ServiceTypeName;
+
+  static async start(runtime: IAgentRuntime): Promise<Service> {
+    return new MyService(runtime);
+  }
+
+  async stop(): Promise<void> {
+    // Cleanup resources
+  }
+}
+
+const pluginWithService: Plugin = {
+  name: 'service-plugin',
+  services: [MyService],
+  // ... rest of plugin
+};
 ```
 
 ## Testing
 
-ElizaOS provides a comprehensive testing structure for plugins:
-
-### Test Structure
-
-- **Component Tests** (`__tests__/` directory):
-
-  - **Unit Tests**: Test individual functions/classes in isolation
-  - **Integration Tests**: Test how components work together
-  - Run with: `elizaos test component`
-
-- **End-to-End Tests** (`e2e/` directory):
-
-  - Test the plugin within a full ElizaOS runtime
-  - Run with: `elizaos test e2e`
-
-- **Running All Tests**:
-  - `elizaos test` runs both component and e2e tests
-
-### Writing Tests
-
-Component tests use Vitest:
-
-```typescript
-// Unit test example (__tests__/plugin.test.ts)
-describe('Plugin Configuration', () => {
-  it('should have correct plugin metadata', () => {
-    expect(starterPlugin.name).toBe('plugin-starter');
-  });
-});
-
-// Integration test example (__tests__/integration.test.ts)
-describe('Integration: HelloWorld Action with StarterService', () => {
-  it('should handle HelloWorld action with StarterService', async () => {
-    // Test interactions between components
-  });
-});
-```
-
-E2E tests use ElizaOS test interface:
-
-```typescript
-// E2E test example (e2e/starter-plugin.test.ts)
-export class StarterPluginTestSuite implements TestSuite {
-  name = 'plugin_starter_test_suite';
-  tests = [
-    {
-      name: 'example_test',
-      fn: async (runtime) => {
-        // Test plugin in a real runtime
-      },
-    },
-  ];
-}
-
-export default new StarterPluginTestSuite();
-```
-
-The test utilities in `__tests__/test-utils.ts` provide mock objects and setup functions to simplify writing tests.
-
-## Publishing & Continuous Development
-
-### Initial Setup
-
-Before publishing your plugin, ensure you meet these requirements:
-
-1. **npm Authentication**
-
-   ```bash
-   npm login
-   ```
-
-2. **GitHub Repository**
-
-   - Create a public GitHub repository for this plugin
-   - Add the 'elizaos-plugins' topic to the repository
-   - Use 'main' as the default branch
-
-3. **Required Assets**
-   - Add images to the `images/` directory:
-     - `logo.jpg` (400x400px square, <500KB)
-     - `banner.jpg` (1280x640px, <1MB)
-
-### Initial Publishing
+Run the comprehensive test suite:
 
 ```bash
-# Test your plugin meets all requirements
-elizaos publish --test
-
-# Publish to npm + GitHub + registry (recommended)
-elizaos publish
+npm test -- plugin-manager
 ```
 
-This command will:
+Tests cover:
 
-- Publish your plugin to npm for easy installation
-- Create/update your GitHub repository
-- Submit your plugin to the ElizaOS registry for discoverability
+- Plugin registration and loading
+- Plugin unloading and cleanup
+- Component registration/unregistration
+- Error handling
+- State management
+- Provider functionality
+- Action validation and handling
 
-### Continuous Development & Updates
+## Future Enhancements
 
-**Important**: After your initial publish with `elizaos publish`, all future updates should be done using standard npm and git workflows, not the ElizaOS CLI.
+1. **Plugin Builder Service**: Integrate with the autobuilder to create plugins from specifications
+2. **Plugin Discovery**: Discover plugins from npm registry or GitHub
+3. **Dependency Resolution**: Automatically install plugin dependencies
+4. **Plugin Marketplace**: Browse and install community plugins
+5. **Hot Reload**: Watch plugin files and reload on changes
+6. **Sandboxing**: Run plugins in isolated contexts for security
+7. **Version Management**: Handle plugin updates and rollbacks
 
-#### Standard Update Workflow
+## Contributing
 
-1. **Make Changes**
+When creating plugins for dynamic loading:
 
-   ```bash
-   # Edit your plugin code
-   elizaos dev  # Test locally with hot-reload
-   ```
+1. Keep plugins self-contained
+2. Handle cleanup in service `stop()` methods
+3. Check for required environment variables in `init()`
+4. Use descriptive names for actions and providers
+5. Include comprehensive error handling
+6. Document plugin capabilities
 
-2. **Test Your Changes**
+## License
 
-   ```bash
-   # Run all tests
-   elizaos test
-
-   # Run specific test types if needed
-   elizaos test component  # Component tests only
-   elizaos test e2e       # E2E tests only
-   ```
-
-3. **Update Version**
-
-   ```bash
-   # Patch version (bug fixes): 1.0.0 → 1.0.1
-   npm version patch
-
-   # Minor version (new features): 1.0.1 → 1.1.0
-   npm version minor
-
-   # Major version (breaking changes): 1.1.0 → 2.0.0
-   npm version major
-   ```
-
-4. **Publish to npm**
-
-   ```bash
-   npm publish
-   ```
-
-5. **Push to GitHub**
-   ```bash
-   git push origin main
-   git push --tags  # Push version tags
-   ```
-
-#### Why Use Standard Workflows?
-
-- **npm publish**: Directly updates your package on npm registry
-- **git push**: Updates your GitHub repository with latest code
-- **Automatic registry updates**: The ElizaOS registry automatically syncs with npm, so no manual registry updates needed
-- **Standard tooling**: Uses familiar npm/git commands that work with all development tools
-
-### Alternative Publishing Options (Initial Only)
-
-```bash
-# Publish to npm only (skip GitHub and registry)
-elizaos publish --npm
-
-# Publish but skip registry submission
-elizaos publish --skip-registry
-
-# Generate registry files locally without publishing
-elizaos publish --dry-run
-```
-
-## Configuration
-
-The `agentConfig` section in `package.json` defines the parameters your plugin requires:
-
-```json
-"agentConfig": {
-  "pluginType": "elizaos:plugin:1.0.0",
-  "pluginParameters": {
-    "API_KEY": {
-      "type": "string",
-      "description": "API key for the service"
-    }
-  }
-}
-```
-
-Customize this section to match your plugin's requirements.
-
-## Documentation
-
-Provide clear documentation about:
-
-- What your plugin does
-- How to use it
-- Required API keys or credentials
-- Example usage
-- Version history and changelog
+MIT
